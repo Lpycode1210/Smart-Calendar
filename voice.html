@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能语音日历与闹钟</title>
+    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js'></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f5f7fa; padding: 20px; margin: 0; display: flex; flex-direction: column; align-items: center; }
+        .header-title { color: #333; margin-bottom: 20px; }
+        .layout-container { display: flex; gap: 20px; width: 100%; max-width: 1200px; flex-wrap: wrap; }
+        
+        /* 左侧控制区 */
+        .control-panel { flex: 1; min-width: 300px; background: white; border-radius: 16px; padding: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); height: fit-content; }
+        .input-group { display: flex; flex-direction: column; gap: 15px; }
+        textarea { width: 100%; height: 100px; border: 1px solid #ddd; border-radius: 12px; padding: 12px; font-size: 16px; resize: none; box-sizing: border-box; }
+        .btn { background: #007bff; color: white; border: none; padding: 12px; border-radius: 12px; font-size: 16px; cursor: pointer; transition: 0.3s; font-weight: bold; }
+        .btn:hover { background: #0056b3; }
+        .btn-mic { background: #ff4757; }
+        .btn-mic.recording { background: #ff6b81; animation: pulse 1.5s infinite; }
+        .status { text-align: center; font-size: 14px; color: #666; min-height: 20px; margin-top: 10px; }
+        
+        /* 右侧日历区 */
+        .calendar-panel { flex: 2; min-width: 400px; background: white; border-radius: 16px; padding: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
+        #calendar { max-height: 600px; }
+
+        /* 闹钟弹窗样式 */
+        .alarm-modal { display: none; position: fixed; top: 20px; right: 20px; background: #ffeaa7; border-left: 5px solid #fdcb6e; padding: 20px; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); z-index: 1000; animation: slideIn 0.5s ease-out; }
+        .alarm-modal h3 { margin: 0 0 10px 0; color: #d63031; }
+        
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.02); } 100% { transform: scale(1); } }
+        @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+    </style>
+</head>
+<body>
+
+<h2 class="header-title">🗓️ 智能语音日历助手</h2>
+
+<div class="layout-container">
+    <div class="control-panel">
+        <div class="input-group">
+            <button id="micBtn" class="btn btn-mic">🎤 点击开始说话</button>
+            <textarea id="textInput" placeholder="例如：明天下午2点到4点在杭州西湖开会"></textarea>
+            <button id="submitBtn" class="btn">✨ 识别并加入日历</button>
+        </div>
+        <div id="statusText" class="status"></div>
+    </div>
+
+    <div class="calendar-panel">
+        <div id="calendar"></div>
+    </div>
+</div>
+
+<div id="alarmModal" class="alarm-modal">
+    <h3>⏰ 会议提醒！</h3>
+    <p id="alarmContent">您的会议将在 30 分钟后开始。</p>
+    <button class="btn" onclick="document.getElementById('alarmModal').style.display='none'" style="padding: 5px 15px; font-size: 14px; margin-top: 10px;">我知道了</button>
+</div>
+
+<audio id="alarmSound" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" preload="auto"></audio>
+
+<script>
+    // ==========================================
+    // 1. 核心配置与状态
+    // ==========================================
+    const API_KEY = "sk-011a9b1379a34019a9a4eebbb9eecca5"; // 请确认您的 Key 仍然有效
+    const API_URL = "https://api.deepseek.com/v1/chat/completions";
+    const MODEL_NAME = "deepseek-chat"; 
+
+    let calendar; // 日历实例
+    let alarms = []; // 存储所有闹钟的定时器ID
+
+    // ==========================================
+    // 2. 初始化日历 (FullCalendar)
+    // ==========================================
+    document.addEventListener('DOMContentLoaded', function() {
+        const calendarEl = document.getElementById('calendar');
+        calendar = new FullCalendar.Calendar(calendarEl, {
+            initialView: 'timeGridWeek', // 默认显示周视图，带时间线
+            locale: 'zh-cn', // 中文
+            headerToolbar: {
+                left: 'prev,next today',
+                center: 'title',
+                right: 'dayGridMonth,timeGridWeek,timeGridDay'
+            },
+            slotMinTime: '08:00:00', // 日历从早上8点开始显示
+            slotMaxTime: '22:00:00',
+            events: [] // 初始事件为空
+        });
+        calendar.render();
+    });
+
+    // ==========================================
+    // 3. 语音识别逻辑 (保持不变)
+    // ==========================================
+    const micBtn = document.getElementById('micBtn');
+    const textInput = document.getElementById('textInput');
+    const statusText = document.getElementById('statusText');
+    
+    let recognition;
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SpeechRecognition();
+        recognition.lang = 'zh-CN';
+        recognition.interimResults = false;
+        
+        recognition.onstart = () => {
+            micBtn.classList.add('recording');
+            micBtn.innerText = '🔴 正在倾听...';
+            statusText.innerText = '请说话...';
+        };
+        
+        recognition.onresult = (event) => {
+            textInput.value = event.results[0][0].transcript;
+            statusText.innerText = '语音输入完成。';
+        };
+        
+        recognition.onend = () => {
+            micBtn.classList.remove('recording');
+            micBtn.innerText = '🎤 点击开始说话';
+        };
+    } else {
+        micBtn.disabled = true;
+        statusText.innerText = '您的浏览器不支持语音识别。';
+    }
+
+    micBtn.addEventListener('click', () => {
+        if (micBtn.classList.contains('recording')) recognition.stop();
+        else recognition.start();
+    });
+
+    // ==========================================
+    // 4. LLM 解析与日历调度
+    // ==========================================
+    const submitBtn = document.getElementById('submitBtn');
+    
+    submitBtn.addEventListener('click', async () => {
+        const text = textInput.value.trim();
+        if (!text) return alert("请输入内容");
+
+        statusText.innerText = '🧠 正在计算时间并安排日程...';
+        submitBtn.disabled = true;
+
+        // 【关键】获取当前时间的标准格式，发给AI作为参考坐标系
+        const now = new Date();
+        const currentTimeStr = now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+
+        const prompt = `你是一个专业的日历助手。
+当前真实时间是：${currentTimeStr}。
+请从用户的输入中提取会议信息，并严格以纯JSON格式输出（不要任何Markdown标记）。
+必须包含以下字段：
+"title": 会议名称 (string)
+"start": 开始时间的 ISO8601 格式，例如 "2026-05-30T14:00:00" (string)
+"end": 结束时间的 ISO8601 格式 (string，如果用户没说结束时间，默认在开始时间上加1小时)
+"location": 地点或平台 (string)
+用户输入：${text}`;
+
+        try {
+            const response = await fetch(API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: MODEL_NAME,
+                    messages: [{ role: "user", content: prompt }],
+                    temperature: 0.1
+                })
+            });
+
+            if (!response.ok) throw new Error("API 请求失败");
+
+            const data = await response.json();
+            const jsonStr = data.choices[0].message.content.trim();
+            const scheduleData = JSON.parse(jsonStr);
+            
+            // 1. 添加到日历视图
+            addEventToCalendar(scheduleData);
+            
+            // 2. 设置闹钟
+            setMeetingAlarm(scheduleData);
+
+            statusText.innerHTML = `<span style="color:green">✅ 已成功添加到日历并设置提醒！</span>`;
+            
+            // 自动将日历跳转到会议所在的那一天
+            calendar.gotoDate(scheduleData.start);
+
+        } catch (error) {
+            console.error(error);
+            statusText.innerHTML = `<span style="color:red">❌ 解析失败: ${error.message}</span>`;
+        } finally {
+            submitBtn.disabled = false;
+        }
+    });
+
+    // ==========================================
+    // 5. 日历与闹钟业务函数
+    // ==========================================
+    function addEventToCalendar(data) {
+        calendar.addEvent({
+            title: `${data.title} (${data.location})`,
+            start: data.start,
+            end: data.end,
+            backgroundColor: '#00b894',
+            borderColor: '#00b894'
+        });
+    }
+
+    function setMeetingAlarm(data) {
+        const startTime = new Date(data.start).getTime();
+        const now = new Date().getTime();
+        
+        // 计算：提前 30 分钟 (30 * 60 * 1000 毫秒)
+        const alarmTime = startTime - (30 * 60 * 1000);
+        const timeUntilAlarm = alarmTime - now;
+
+        if (timeUntilAlarm > 0) {
+            // 如果闹钟时间在未来，设置定时器
+            const timerId = setTimeout(() => {
+                triggerAlarm(data);
+            }, timeUntilAlarm);
+            alarms.push(timerId);
+            console.log(`已设置闹钟，将在 ${timeUntilAlarm / 1000} 秒后响铃`);
+        } else if (startTime > now) {
+             // 如果不足30分钟但还没开会，立即提醒
+             triggerAlarm(data);
+        } else {
+             console.log("会议时间已过，不设置闹钟");
+        }
+    }
+
+    function triggerAlarm(data) {
+        // 播放提示音
+        const audio = document.getElementById('alarmSound');
+        audio.play().catch(e => console.log("浏览器阻止了自动播放声音"));
+        
+        // 显示视觉弹窗
+        const modal = document.getElementById('alarmModal');
+        const content = document.getElementById('alarmContent');
+        content.innerHTML = `<strong>${data.title}</strong> 将在30分钟后开始！<br>地点：${data.location}`;
+        modal.style.display = 'block';
+    }
+</script>
+</body>
+</html>

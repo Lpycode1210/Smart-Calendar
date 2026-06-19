@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>企业级智能日历 Agent</title>
+    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js'></script>
+    <style>
+        :root { --primary: #007bff; --success: #00b894; --life: #00b894; --meeting: #007bff; --bg: #f5f7fa; --card-bg: #ffffff; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: var(--bg); padding: 20px; margin: 0; display: flex; flex-direction: column; align-items: center; }
+        .header-title { color: #333; margin-bottom: 20px; text-align: center; }
+        .layout-container { display: flex; gap: 20px; width: 100%; max-width: 1400px; flex-wrap: wrap; }
+        
+        .control-panel { flex: 1; min-width: 320px; background: var(--card-bg); border-radius: 16px; padding: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); height: fit-content; }
+        .input-group { display: flex; flex-direction: column; gap: 12px; }
+        textarea { width: 100%; height: 80px; border: 1px solid #ddd; border-radius: 12px; padding: 12px; font-size: 14px; resize: none; box-sizing: border-box; }
+        .btn { background: var(--primary); color: white; border: none; padding: 12px; border-radius: 12px; font-size: 15px; cursor: pointer; transition: 0.3s; font-weight: bold; }
+        .btn:hover { opacity: 0.9; }
+        .btn-mic { background: #ff4757; }
+        .btn-mic.recording { background: #ff6b81; animation: pulse 1.5s infinite; }
+        .btn-report { background: #6c5ce7; margin-top: 15px; }
+        
+        .settings-bar { display: flex; justify-content: space-between; align-items: center; font-size: 14px; color: #555; padding: 10px 0; border-bottom: 1px dashed #eee; margin-bottom: 10px; }
+        .status { text-align: center; font-size: 13px; color: #666; min-height: 20px; margin-top: 10px; }
+        .agent-insight { margin-top: 15px; padding: 12px; background: #e3f2fd; border-radius: 8px; font-size: 13px; color: #1976d2; display: none; }
+        .search-result-link { display: inline-block; background: #fff; border: 1px solid #1976d2; padding: 4px 8px; border-radius: 4px; margin: 4px; cursor: pointer; color: #1976d2; text-decoration: none; }
+        .search-result-link:hover { background: #1976d2; color: #fff; }
+        
+        .calendar-panel { flex: 2.5; min-width: 400px; background: var(--card-bg); border-radius: 16px; padding: 25px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
+        #calendar { max-height: 700px; }
+        .past-event { background-color: #dcdde1 !important; border-color: #dcdde1 !important; color: #7f8fa6 !important; text-decoration: line-through; }
+
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+        .modal-content { background: white; padding: 25px; border-radius: 16px; width: 90%; max-width: 400px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+        .modal-row { margin-bottom: 12px; font-size: 14px; color: #333; }
+        .modal-input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-family: inherit; }
+        .modal-input:disabled { background: #f5f5f5; cursor: not-allowed; }
+        .link-btn { display: inline-block; padding: 8px 12px; background: var(--success); color: white; text-decoration: none; border-radius: 6px; font-size: 13px; margin-top: 5px; }
+        
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.02); } 100% { transform: scale(1); } }
+    </style>
+</head>
+<body>
+
+<h2 class="header-title">🗓️ 企业级智能日历 Agent</h2>
+
+<div class="layout-container">
+    <div class="control-panel">
+        <div class="settings-bar">
+            <label><input type="checkbox" id="alarmToggle" checked> 开启会前30分钟提醒</label>
+            <span id="clock">00:00:00</span>
+        </div>
+        
+        <div class="input-group">
+            <button id="micBtn" class="btn btn-mic">🎤 按住说话 (安排/查询/总结)</button>
+            <textarea id="textInput" placeholder="例如：明天下午2点开会。&#10;或者：查询一下关于王者荣耀的会议。&#10;或者：总结刚刚的会议..."></textarea>
+            <button id="submitBtn" class="btn">✨ 提交给 Agent</button>
+        </div>
+        
+        <div id="statusText" class="status">系统已就绪。</div>
+        <div id="agentInsight" class="agent-insight"></div>
+
+        <button id="reportBtn" class="btn btn-report" style="width:100%">📊 一键生成本周会议周报</button>
+    </div>
+
+    <div class="calendar-panel">
+        <div id="calendar"></div>
+    </div>
+</div>
+
+<div id="eventModal" class="modal-overlay">
+    <div class="modal-content">
+        <div class="modal-row">
+            <strong>事件名称:</strong>
+            <input type="text" id="modalTitle" class="modal-input" style="font-weight: bold; margin-top: 5px;">
+        </div>
+        <div class="modal-row" id="modalMeetingIdRow">
+            <strong>会议编号:</strong>
+            <input type="text" id="modalMeetingId" class="modal-input" style="margin-top: 5px;">
+        </div>
+        <div class="modal-row" id="modalTime" style="color: #636e72;"></div>
+        <div class="modal-row" id="modalLocation" style="color: #636e72;"></div>
+        <div id="modalLinkContainer"></div>
+        
+        <hr style="border:0; border-top:1px dashed #eee; margin:15px 0;">
+        
+        <div class="modal-row"><strong>备忘录:</strong></div>
+        <textarea id="modalMemo" class="modal-input" placeholder="记录一些注意事项..." style="height: 60px;"></textarea>
+        
+        <div class="modal-row" id="modalSummaryWrapper">
+            <strong>会议总结:</strong>
+            <textarea id="modalSummary" class="modal-input" placeholder="可以在此记录会议纪要..." style="height: 80px;"></textarea>
+        </div>
+        
+        <div style="display:flex; justify-content:space-between; margin-top:20px;">
+            <button class="btn" style="background:#ff7675; padding:8px 15px;" onclick="deleteEvent()">删除事件</button>
+            <div style="display:flex; gap:10px;">
+                <button class="btn" style="background:#b2bec3; padding:8px 15px;" onclick="closeModal()">取消</button>
+                <button class="btn" style="padding:8px 15px;" onclick="saveModalData()">保存修改</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="reportModal" class="modal-overlay">
+    <div class="modal-content" style="max-width: 600px;">
+        <h3>📊 Agent 工作周报</h3>
+        <div id="reportContent" style="font-size:14px; line-height:1.6; color:#333; max-height:400px; overflow-y:auto; white-space:pre-wrap;">生成中...</div>
+        <div style="text-align:right; margin-top:15px;">
+            <button class="btn" onclick="document.getElementById('reportModal').style.display='none'">关闭</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ==========================================
+    // 配置与数据状态
+    // ==========================================
+    const API_KEY = "sk-c35f3212a3924cf2b24d26443265c5cc"; 
+    const API_URL = "https://api.deepseek.com/chat/completions";
+    const MODEL_NAME = "deepseek-v4-pro"; 
+
+    let calendar;
+    let eventDB = JSON.parse(localStorage.getItem('agent_events')) || []; 
+    let namingHabits = JSON.parse(localStorage.getItem('agent_habits')) || []; // 学习命名习惯
+    let currentEditingEventId = null;
+
+    setInterval(() => { document.getElementById('clock').innerText = new Date().toLocaleTimeString(); }, 1000);
+
+    // ==========================================
+    // 初始化 FullCalendar
+    // ==========================================
+    document.addEventListener('DOMContentLoaded', function() {
+        const calendarEl = document.getElementById('calendar');
+        calendar = new FullCalendar.Calendar(calendarEl, {
+            initialView: 'timeGridWeek',
+            locale: 'zh-cn',
+            headerToolbar: { left: 'prev,next today', center: 'title', right: 'dayGridMonth,timeGridWeek' },
+            slotMinTime: '08:00:00',
+            slotMaxTime: '22:00:00',
+            editable: true, 
+            events: eventDB, 
+            eventClassNames: function(arg) {
+                if (arg.event.start < new Date()) return ['past-event'];
+                return [];
+            },
+            eventClick: function(info) { openEventModal(info.event); },
+            eventDrop: updateEventToDB,
+            eventResize: updateEventToDB
+        });
+        calendar.render();
+    });
+
+    function updateEventToDB(info) {
+        const idx = eventDB.findIndex(e => e.id === info.event.id);
+        if(idx > -1) {
+            eventDB[idx].start = info.event.start.toISOString();
+            eventDB[idx].end = info.event.end ? info.event.end.toISOString() : null;
+            saveDB();
+        }
+    }
+
+    // ==========================================
+    // 弹窗逻辑 (区分生活事务与会议事务，限制总结)
+    // ==========================================
+    function openEventModal(event) {
+        currentEditingEventId = event.id;
+        const props = event.extendedProps;
+        const isMeeting = props.eventType === 'meeting';
+
+        document.getElementById('modalTitle').value = event.title;
+        document.getElementById('modalTime').innerText = `🕒 时间: ${event.start.toLocaleString()}`;
+        document.getElementById('modalLocation').innerText = `📍 地点: ${props.location || '未定'}`;
+        document.getElementById('modalMemo').value = props.memo || '';
+
+        // 视图控制：生活事务隐藏编号和总结
+        const meetingIdRow = document.getElementById('modalMeetingIdRow');
+        const summaryWrapper = document.getElementById('modalSummaryWrapper');
+        const summaryBox = document.getElementById('modalSummary');
+
+        if (isMeeting) {
+            meetingIdRow.style.display = 'block';
+            summaryWrapper.style.display = 'block';
+            document.getElementById('modalMeetingId').value = props.meetingId || '';
+            summaryBox.value = props.summary || '';
+            
+            // 会议未开始，锁定总结框
+            if (new Date() < new Date(event.start)) {
+                summaryBox.disabled = true;
+                summaryBox.placeholder = "🔒 会议开始后方可记录总结";
+            } else {
+                summaryBox.disabled = false;
+                summaryBox.placeholder = "可以在此记录会议纪要...";
+            }
+        } else {
+            // 生活事务
+            meetingIdRow.style.display = 'none';
+            summaryWrapper.style.display = 'none';
+        }
+        
+        // 线上会议一键入会
+        const linkContainer = document.getElementById('modalLinkContainer');
+        linkContainer.innerHTML = '';
+        if (props.is_online && props.platform) {
+            let scheme = props.platform.includes('腾讯') ? 'wemeet://' : props.platform.includes('飞书') ? 'lark://' : 'dingtalk://';
+            linkContainer.innerHTML = `<a href="${scheme}" target="_blank" class="link-btn">🔗 一键进入${props.platform}</a>`;
+        }
+
+        document.getElementById('eventModal').style.display = 'flex';
+    }
+
+    function closeModal() { document.getElementById('eventModal').style.display = 'none'; currentEditingEventId = null; }
+
+    function saveModalData() {
+        const idx = eventDB.findIndex(e => e.id === currentEditingEventId);
+        if(idx > -1) {
+            const oldTitle = eventDB[idx].title;
+            const newTitle = document.getElementById('modalTitle').value;
+            
+            // AI 习惯学习：记录用户修改的标题
+            if(oldTitle !== newTitle && newTitle.trim() !== '') {
+                namingHabits.push({ original: oldTitle, user_modified: newTitle });
+                if(namingHabits.length > 5) namingHabits.shift(); // 最多存5条近期习惯
+                localStorage.setItem('agent_habits', JSON.stringify(namingHabits));
+            }
+
+            eventDB[idx].title = newTitle;
+            eventDB[idx].extendedProps.memo = document.getElementById('modalMemo').value;
+            
+            if(eventDB[idx].extendedProps.eventType === 'meeting') {
+                eventDB[idx].extendedProps.meetingId = document.getElementById('modalMeetingId').value;
+                if (!document.getElementById('modalSummary').disabled) {
+                    eventDB[idx].extendedProps.summary = document.getElementById('modalSummary').value;
+                }
+            }
+
+            saveDB();
+            const calEvent = calendar.getEventById(currentEditingEventId);
+            calEvent.setProp('title', newTitle);
+            calEvent.setExtendedProp('memo', eventDB[idx].extendedProps.memo);
+            calEvent.setExtendedProp('summary', eventDB[idx].extendedProps.summary);
+            calEvent.setExtendedProp('meetingId', eventDB[idx].extendedProps.meetingId);
+        }
+        closeModal();
+    }
+
+    function deleteEvent() {
+        if(confirm('确定要删除此事件吗？')) {
+            eventDB = eventDB.filter(e => e.id !== currentEditingEventId);
+            saveDB();
+            calendar.getEventById(currentEditingEventId).remove();
+            closeModal();
+        }
+    }
+
+    function saveDB() { localStorage.setItem('agent_events', JSON.stringify(eventDB)); }
+
+    // ==========================================
+    // 动态生成会议编号 M+年月日+n
+    // ==========================================
+    function generateMeetingId(dateStr) {
+        const d = new Date(dateStr);
+        const yy = d.getFullYear().toString().slice(2);
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+
+        // 计算本周的星期一
+        const day = d.getDay() || 7; 
+        const startOfWeek = new Date(d);
+        startOfWeek.setDate(d.getDate() - day + 1);
+        startOfWeek.setHours(0,0,0,0);
+        
+        const endOfWeek = new Date(startOfWeek);
+        endOfWeek.setDate(startOfWeek.getDate() + 6);
+        endOfWeek.setHours(23,59,59,999);
+
+        // 计算这周内的第几场会议
+        let count = 0;
+        eventDB.forEach(e => {
+            if (e.extendedProps.eventType === 'meeting') {
+                const ed = new Date(e.start);
+                if (ed >= startOfWeek && ed <= endOfWeek && ed.getTime() <= d.getTime()) {
+                    count++;
+                }
+            }
+        });
+        return `M${yy}${mm}${dd}-${count + 1}`;
+    }
+
+    // ==========================================
+    // 语音输入与 Agent 调度
+    // ==========================================
+    const micBtn = document.getElementById('micBtn');
+    const textInput = document.getElementById('textInput');
+    let recognition;
+    if ('webkitSpeechRecognition' in window) {
+        recognition = new window.webkitSpeechRecognition();
+        recognition.lang = 'zh-CN';
+        recognition.onstart = () => { micBtn.classList.add('recording'); micBtn.innerText = '🔴 录音中...'; };
+        recognition.onresult = (e) => { textInput.value += e.results[0][0].transcript; };
+        recognition.onend = () => { micBtn.classList.remove('recording'); micBtn.innerText = '🎤 按住说话 (安排/查询/总结)'; };
+    }
+    micBtn.addEventListener('mousedown', () => { if(recognition) recognition.start(); });
+    micBtn.addEventListener('mouseup', () => { if(recognition) recognition.stop(); });
+
+    // --- 核心 Agent 请求 ---
+    const submitBtn = document.getElementById('submitBtn');
+    const statusText = document.getElementById('statusText');
+    const insightBox = document.getElementById('agentInsight');
+
+    // 辅助函数：外部触发打开弹窗
+    window.openEventById = function(id) {
+        const ev = calendar.getEventById(id);
+        if(ev) openEventModal(ev);
+    }
+
+    submitBtn.addEventListener('click', async () => {
+        const text = textInput.value.trim();
+        if (!text) return;
+
+        statusText.innerText = '🧠 Agent 正在深度思考并处理... (需要10-20秒)';
+        submitBtn.disabled = true;
+        insightBox.style.display = 'none';
+
+        const nowStr = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+        
+        // 构建轻量级记忆索引，防止浪费Token
+        const memoryIndex = eventDB.map(e => `[ID:${e.id}] ${e.title} (${new Date(e.start).toLocaleDateString()})`).join('\n');
+        const habitStr = namingHabits.map(h => `${h.original} -> ${h.user_modified}`).join('; ');
+
+        const prompt = `你是一个企业助理Agent。时间：${nowStr}。
+【重要记忆库】
+你的用户命名习惯（尽量模仿右侧简写）：${habitStr || '无'}
+现有历史事件索引：
+${memoryIndex || '暂无历史事件'}
+
+【输出要求】
+根据用户意图，严格输出纯JSON数组。绝对不要Markdown标记！字数尽可能少，突出重点。
+包含以下三种操作类型：
+1. 添加事件 (判断生活/会议)：
+{"type": "add", "eventType": "life"或"meeting", "title": "极简名称", "start": "ISO时间", "end": "ISO时间", "location": "地点", "is_online": true/false, "platform": "平台名或null", "memo": "提取的备忘"}
+2. 查询/模糊搜索过去的事件：
+{"type": "search_result", "eventIds": ["匹配的ID1", "匹配的ID2"], "reply": "我帮您找到了..."}
+3. 会议总结 (必须从现有历史事件索引中找到准确的ID填入)：
+{"type": "summary", "eventId": "历史事件的ID", "content": "总结内容"}
+
+用户输入：${text}`;
+
+        try {
+            const res = await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${API_KEY}` },
+                body: JSON.stringify({ 
+                    model: MODEL_NAME, 
+                    messages: [
+                        { role: "system", content: "你是一个专业的企业级日历Agent助理。" },
+                        { role: "user", content: prompt }
+                    ],
+                    thinking: { type: "enabled" }, 
+                    reasoning_effort: "high",      
+                    stream: false 
+                })
+            });
+
+            if (!res.ok) throw new Error("API 请求失败");
+            
+            const data = await res.json();
+            let jsonStr = data.choices[0].message.content.trim();
+            if (jsonStr.startsWith('```json')) jsonStr = jsonStr.replace(/^```json/, '').replace(/```$/, '').trim();
+            else if (jsonStr.startsWith('```')) jsonStr = jsonStr.replace(/^```/, '').replace(/```$/, '').trim();
+
+            const tasks = Array.isArray(JSON.parse(jsonStr)) ? JSON.parse(jsonStr) : [JSON.parse(jsonStr)];
+            
+            let htmlMsg = '';
+            
+            tasks.forEach(task => {
+                if (task.type === 'add') {
+                    const bgColor = task.eventType === 'life' ? '#00b894' : '#007bff';
+                    const newEvent = {
+                        id: Date.now().toString(),
+                        title: task.title,
+                        start: task.start,
+                        end: task.end,
+                        backgroundColor: bgColor,
+                        borderColor: bgColor,
+                        extendedProps: { 
+                            eventType: task.eventType, 
+                            location: task.location, 
+                            is_online: task.is_online, 
+                            platform: task.platform, 
+                            memo: task.memo || '',
+                            summary: ''
+                        }
+                    };
+                    
+                    if(task.eventType === 'meeting') {
+                        newEvent.extendedProps.meetingId = generateMeetingId(task.start);
+                    }
+                    
+                    eventDB.push(newEvent);
+                    calendar.addEvent(newEvent);
+                    calendar.gotoDate(newEvent.start);
+                    htmlMsg += `✅ 添加了${task.eventType==='life'?'生活事务':'会议'}：《${task.title}》<br>`;
+                } 
+                else if (task.type === 'search_result') {
+                    insightBox.style.display = 'block';
+                    let linksHtml = task.eventIds.map(id => {
+                        let ev = eventDB.find(e => e.id === id);
+                        return ev ? `<a class="search-result-link" onclick="openEventById('${ev.id}')">${ev.title} (${new Date(ev.start).toLocaleDateString()})</a>` : '';
+                    }).join('');
+                    insightBox.innerHTML = `💡 <b>Agent 搜索结果：</b> ${task.reply}<br>${linksHtml}`;
+                }
+                else if (task.type === 'summary') {
+                    const idx = eventDB.findIndex(e => e.id === task.eventId);
+                    if (idx > -1) {
+                        eventDB[idx].extendedProps.summary = (eventDB[idx].extendedProps.summary || '') + "\n" + task.content;
+                        const calEv = calendar.getEventById(task.eventId);
+                        if(calEv) calEv.setExtendedProp('summary', eventDB[idx].extendedProps.summary);
+                        htmlMsg += `✅ 已将会议总结归档至：《${eventDB[idx].title}》<br>`;
+                    } else {
+                        htmlMsg += `⚠️ 找不到对应的历史会议进行总结归档。<br>`;
+                    }
+                }
+            });
+            
+            saveDB();
+            statusText.innerHTML = `<span style="color:green">${htmlMsg || '任务执行完毕。'}</span>`;
+            if (tasks.some(t => t.type === 'add' || t.type === 'summary')) textInput.value = '';
+
+        } catch (e) {
+            console.error("报错:", e);
+            statusText.innerHTML = `<span style="color:red">❌ 处理失败: 请确保大模型返回了标准JSON格式。</span>`;
+        } finally {
+            submitBtn.disabled = false;
+        }
+    });
+
+    // ==========================================
+    // 一键生成周报 (保持功能)
+    // ==========================================
+    document.getElementById('reportBtn').addEventListener('click', async () => {
+        if (eventDB.length === 0) return alert("无记录。");
+        document.getElementById('reportModal').style.display = 'flex';
+        document.getElementById('reportContent').innerText = "Agent 正在生成周报，请稍候...";
+        const eventText = eventDB.map(e => `- ${e.title} (${e.start})。纪要：${e.extendedProps.summary || '无'}`).join("\n");
+        const prompt = `写一份高管周报。包含：1.会议次数。2.核心共识。3.下一步重点。会议数据：\n${eventText}`;
+
+        try {
+            const res = await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${API_KEY}` },
+                body: JSON.stringify({ model: MODEL_NAME, messages: [{ role: "system", content: "你是老板参谋。" }, { role: "user", content: prompt }], thinking: { type: "enabled" }, reasoning_effort: "high", stream: false })
+            });
+            const data = await res.json();
+            document.getElementById('reportContent').innerText = data.choices[0].message.content;
+        } catch (e) {
+            document.getElementById('reportContent').innerText = "生成失败。";
+        }
+    });
+</script>
+</body>
+</html>
